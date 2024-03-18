@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="en">
+    <!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=1">
+  <meta name="color-scheme" content="light dark">
+  
+  <title>浅析一下Java FFM API(Project Panama) - makai410</title>
+  
+    <link rel="shortcut icon" href="/favicon.png">
+  
+  
+    <link rel='manifest' href='/manifest.json'>
+  
+
+  
+<link rel="stylesheet" href="/css/var.css">
+
+  
+<link rel="stylesheet" href="/css/main.css">
+
+  
+<link rel="stylesheet" href="/css/typography.css">
+
+  
+<link rel="stylesheet" href="/css/code-highlighting.css">
+
+  
+<link rel="stylesheet" href="/css/components.css">
+
+  
+<link rel="stylesheet" href="/css/nav.css">
+
+  
+<link rel="stylesheet" href="/css/paginator.css">
+
+  
+<link rel="stylesheet" href="/css/footer.css">
+
+  
+<link rel="stylesheet" href="/css/post-list.css">
+
+  
+  
+<link rel="stylesheet" href="/css/rainbow-banner.css">
+
+  
+  
+  
+<link rel="stylesheet" href="/css/toc.css">
+
+  
+  
+    
+<link rel="stylesheet" href="/css/giscus.css">
+
+  
+  
+  
+  
+<link rel="stylesheet" href="/css/post.css">
+
+  
+  
+  
+  
+  
+
+  
+<!-- hexo injector head_end start -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.12.0/dist/katex.min.css">
+
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/hexo-math@4.0.0/dist/style.css">
+<!-- hexo injector head_end end --><meta name="generator" content="Hexo 5.4.2"></head>
+    <body
+        data-color-scheme="dark"
+        data-uppercase-categories="true"
+        
+        data-rainbow-banner="true"
+        data-rainbow-banner-shown="auto"
+        data-rainbow-banner-month="6"
+        data-rainbow-banner-colors="#e50000,#ff8d00,#ffee00,#008121,#004cff,#760188"
+        
+        data-config-root="/"
+        
+        data-toc="true"
+        data-toc-max-depth="2"
+        
+        
+    >
+        <nav id="theme-nav">
+    <div class="inner">
+        <a class="title" href="/">Blog</a>
+        <div class="nav-arrow"></div>
+        <div class="nav-items">
+            <a class="nav-item nav-item-home" href="/">Home</a>
+            
+            
+            <a class="nav-item" href="/archives">Archives</a>
+            
+            
+            
+            <a class="nav-item" href="/categories">Categories</a>
+            
+            
+            
+            <a class="nav-item" href="/friends">Friends</a>
+            
+            
+            
+            <a class="nav-item" href="/projects">Projects</a>
+            
+            
+            
+            <a class="nav-item" href="/about">About</a>
+            
+            
+            
+            <a class="nav-item nav-item-github nav-item-icon" href="https://github.com/makai410" target="_blank">&nbsp;</a>
+            
+            
+            
+            <a class="nav-item nav-item-search nav-item-icon" href="/search" target="_blank">&nbsp;</a>
+            
+            
+        </div>
+    </div>
+</nav>
+        
+<article class="post">
+    <div class="meta">
+        
+        <div class="categories text-uppercase">
+        
+            <a href="/categories/Hotspot/">Hotspot</a>
+        
+        </div>
+        
+
+        
+        <div class="date" id="date">
+            <span>August</span>
+            <span>5,</span>
+            <span>2023</span>
+        </div>
+        
+
+        <h2 class="title">浅析一下Java FFM API(Project Panama)</h2>
+    </div>
+
+    <div class="divider"></div>
+
+    <div class="content">
+        <p><strong>这篇文章并不是讲如何使用Java FFM API，而是浅谈其背后的实现原理。</strong></p>
+<h2 id="前言"><a class="markdownIt-Anchor" href="#前言"></a> 前言</h2>
+<p>前不久，OpenJDK宣布了<code>Java Foreign Function &amp; Memory API</code>将在JDK 22退出预览，这意味着在JDK 22后，FFM API不会有重大改动。借此机会，我想可以好好聊聊FFM API是怎么实现的。</p>
+<h2 id="ffm-api介绍"><a class="markdownIt-Anchor" href="#ffm-api介绍"></a> FFM API介绍</h2>
+<p>FFM API由两大部分组成，一个是<code>Foreign Function Interface</code>，另一个是<code>Memory API</code>。前者是外部函数接口，简称FFI，用它来实现Java代码和外部代码之间相互操作；后者是内存接口，用于<strong>安全地</strong>管理堆外内存。</p>
+<h2 id="memory-api"><a class="markdownIt-Anchor" href="#memory-api"></a> Memory API</h2>
+<p>为了方便切入，我这里写了一个很简单的Demo：</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">void</span> <span class="title function_">allocDemo</span><span class="params">()</span> <span class="keyword">throws</span> Throwable &#123;</span><br><span class="line">    <span class="keyword">try</span> (<span class="type">Arena</span> <span class="variable">arena</span> <span class="operator">=</span> Arena.ofConfined()) &#123;</span><br><span class="line">        <span class="type">MemorySegment</span> <span class="variable">cString</span> <span class="operator">=</span> arena.allocateUtf8String(<span class="string">&quot;Panama&quot;</span>);</span><br><span class="line">        <span class="type">String</span> <span class="variable">jString</span> <span class="operator">=</span> cString.getUtf8String(<span class="number">0l</span>);</span><br><span class="line">        System.out.println(jString);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<ul>
+<li>这里在堆外开辟了一段内存来存放字符串<code>Panama</code>，接下来copy到JVM栈上，最后输出。</li>
+<li>简单介绍下，<code>MemorySegment</code>用于表示一段内存片段（既可以是堆内也可以是堆外），<code>Arena</code>划定了一个作用域，便于进行内存回收。</li>
+</ul>
+<p>这背后做了些什么工作呢？我们跳过去看看。</p>
+<h3 id="memory-api是对jdkinternalmiscunsafe的安全封装"><a class="markdownIt-Anchor" href="#memory-api是对jdkinternalmiscunsafe的安全封装"></a> Memory API是对jdk.internal.misc.Unsafe的安全封装</h3>
+<p>我们首先跳到<code>cString.getUtfString</code>，因为很明显该部分涉及到访问堆外内存的操作。局部代码如下：</p>
+<p><code>MemorySegment.java line:1089</code></p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">default</span> String <span class="title function_">getUtf8String</span><span class="params">(<span class="type">long</span> offset)</span> &#123;</span><br><span class="line">    <span class="keyword">return</span> SharedUtils.toJavaStringInternal(<span class="built_in">this</span>, offset);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<ul>
+<li>这里写把操作写到了一个Util里面。</li>
+</ul>
+<p>我们跳过去看看。</p>
+<hr />
+<p><code>ShareUtils.java line:250</code></p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">public</span> <span class="keyword">static</span> String <span class="title function_">toJavaStringInternal</span><span class="params">(MemorySegment segment, <span class="type">long</span> start)</span> &#123;</span><br><span class="line">    <span class="type">int</span> <span class="variable">len</span> <span class="operator">=</span> strlen(segment, start);</span><br><span class="line">    <span class="type">byte</span>[] bytes = <span class="keyword">new</span> <span class="title class_">byte</span>[len];</span><br><span class="line">    MemorySegment.copy(segment, JAVA_BYTE, start, bytes, <span class="number">0</span>, len);</span><br><span class="line">    <span class="keyword">return</span> <span class="keyword">new</span> <span class="title class_">String</span>(bytes, StandardCharsets.UTF_8);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<ul>
+<li>这里设置了一个<code>byte</code>数组，这是在JVM栈上的，之后访问堆外内存，进行copy操作。</li>
+</ul>
+<p>很明显<code>MemorySegment.copy</code>才是我们关心的，再跳过去看看。</p>
+<hr />
+<p><code>MemorySegment.java line:2209</code></p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@ForceInline</span></span><br><span class="line"><span class="keyword">static</span> <span class="keyword">void</span> <span class="title function_">copy</span><span class="params">(</span></span><br><span class="line"><span class="params">        MemorySegment srcSegment, ValueLayout srcLayout, <span class="type">long</span> srcOffset,</span></span><br><span class="line"><span class="params">        Object dstArray, <span class="type">int</span> dstIndex, <span class="type">int</span> elementCount)</span> &#123;</span><br><span class="line">    Objects.requireNonNull(srcSegment);</span><br><span class="line">    Objects.requireNonNull(dstArray);</span><br><span class="line">    Objects.requireNonNull(srcLayout);</span><br><span class="line"></span><br><span class="line">    AbstractMemorySegmentImpl.copy(srcSegment, srcLayout, srcOffset,</span><br><span class="line">            dstArray, dstIndex,</span><br><span class="line">            elementCount);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<ul>
+<li>这里先是一顿判空，之后再调用了<code>AbstractMemorySegmentImpl.copy</code>方法，这里<code>AbstractMemorySegmentImpl</code>是<code>MemorySegment</code>的实现，<code>MemorySegment</code>是一个密封接口，只允许了<code>AbstractMemorySegmentImpl</code>实现。</li>
+</ul>
+<p>OK，继续跳转。</p>
+<hr />
+<p><code>AbstractMemorySegmentImpl.java line:625</code></p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line">   <span class="meta">@ForceInline</span></span><br><span class="line">   <span class="keyword">public</span> <span class="keyword">static</span> <span class="keyword">void</span> <span class="title function_">copy</span><span class="params">(MemorySegment srcSegment, ValueLayout srcLayout, <span class="type">long</span> srcOffset,</span></span><br><span class="line"><span class="params">                           Object dstArray, <span class="type">int</span> dstIndex,</span></span><br><span class="line"><span class="params">                           <span class="type">int</span> elementCount)</span> &#123;</span><br><span class="line"><span class="comment">// 此处省略了原本一系列判空、校验等操作。</span></span><br><span class="line">       <span class="keyword">if</span> (dstWidth == <span class="number">1</span> || srcLayout.order() == ByteOrder.nativeOrder()) &#123;</span><br><span class="line">           ScopedMemoryAccess.getScopedMemoryAccess().copyMemory(srcImpl.sessionImpl(), <span class="literal">null</span>,</span><br><span class="line">                   srcImpl.unsafeGetBase(), srcImpl.unsafeGetOffset() + srcOffset,</span><br><span class="line">                   dstArray, dstBase + (dstIndex * dstWidth), elementCount * dstWidth);</span><br><span class="line">       &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">           ScopedMemoryAccess.getScopedMemoryAccess().copySwapMemory(srcImpl.sessionImpl(), <span class="literal">null</span>,</span><br><span class="line">                   srcImpl.unsafeGetBase(), srcImpl.unsafeGetOffset() + srcOffset,</span><br><span class="line">                   dstArray, dstBase + (dstIndex * dstWidth), elementCount * dstWidth, dstWidth);</span><br><span class="line">       &#125;</span><br><span class="line">   &#125;</span><br></pre></td></tr></table></figure>
+<ul>
+<li>这里可以看到一个<code>ScopedMemoryAccess</code>，熟悉jdk.internal.misc.Unsafe的大佬估计到这就懂了，<code>ScopedMemoryAccess</code>也是在jdk.internal.misc下的，并且其中有一个<code>UNSAFE</code>字段。</li>
+</ul>
+<p>最终，我们顺着<code>ScopedMemoryAccess.getScopedMemoryAccess().copyMemory</code>最终会跳转到哪里呢？答案是<code>Unsafe</code>中的一个native方法：<code>copyMemory0</code>，<s>而该native方法是通过JNI实现的</s>虽然它是一个native方法，但是它被<code>@IntrinsicCandidate</code>注解修饰。</p>
+<h4 id="intrinsiccandidate"><a class="markdownIt-Anchor" href="#intrinsiccandidate"></a> @IntrinsicCandidate</h4>
+<p>这个注解表明被修饰的方法<strong>可能</strong>会被HotSpot内联，这取决于是否为当前平台的虚拟机手写了汇编/编译器IR，以降低开销。</p>
+<p>部分jdk.internal.misc.Unsafe的native方法如下：</p>
+<p><code>Unsafe.java line:3823</code></p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">private</span> <span class="keyword">native</span> <span class="type">long</span> <span class="title function_">allocateMemory0</span><span class="params">(<span class="type">long</span> bytes)</span>;</span><br><span class="line"><span class="keyword">private</span> <span class="keyword">native</span> <span class="type">long</span> <span class="title function_">reallocateMemory0</span><span class="params">(<span class="type">long</span> address, <span class="type">long</span> bytes)</span>;</span><br><span class="line"><span class="keyword">private</span> <span class="keyword">native</span> <span class="keyword">void</span> <span class="title function_">freeMemory0</span><span class="params">(<span class="type">long</span> address)</span>;</span><br><span class="line"><span class="keyword">private</span> <span class="keyword">native</span> <span class="keyword">void</span> <span class="title function_">setMemory0</span><span class="params">(Object o, <span class="type">long</span> offset, <span class="type">long</span> bytes, <span class="type">byte</span> value)</span>;</span><br><span class="line"><span class="meta">@IntrinsicCandidate</span></span><br><span class="line"><span class="keyword">private</span> <span class="keyword">native</span> <span class="keyword">void</span> <span class="title function_">copyMemory0</span><span class="params">(Object srcBase, <span class="type">long</span> srcOffset, Object destBase, <span class="type">long</span> destOffset, <span class="type">long</span> bytes)</span>;</span><br><span class="line"><span class="keyword">private</span> <span class="keyword">native</span> <span class="keyword">void</span> <span class="title function_">copySwapMemory0</span><span class="params">(Object srcBase, <span class="type">long</span> srcOffset, Object destBase, <span class="type">long</span> destOffset, <span class="type">long</span> bytes, <span class="type">long</span> elemSize)</span>;</span><br><span class="line"><span class="keyword">private</span> <span class="keyword">native</span> <span class="type">long</span> <span class="title function_">objectFieldOffset0</span><span class="params">(Field f)</span>;</span><br></pre></td></tr></table></figure>
+<ul>
+<li>可以看到像<code>Unsafe::allocateMemory0</code>, <code>Unsafe::freeMemory0</code>等关键的native方法未被<code>@IntrinsicCandidate</code>注解修饰，这也意味着这些方法是使用JNI实现的。</li>
+</ul>
+<p>那么Memory API是否使用了这些native方法呢？</p>
+<p>经过分析，Memory API开辟堆外内存的操作确实使用了<code>Unsafe::allocateMemory0</code>方法。</p>
+<p>OK，可以下结论了：Memory API是对<code>jdk.internal.misc.Unsafe</code>的封装，使得Java程序员操纵堆外内存更加得心应手，让Unsafe变得Safe。这一点其实已在相关的JEP里表明了：</p>
+<blockquote>
+<h2 id="non-goals"><a class="markdownIt-Anchor" href="#non-goals"></a> Non-goals</h2>
+<p>It is not a goal to</p>
+<p>· Re-implement JNI on top of this API, or otherwise change JNI in any way;</p>
+<p>· Re-implement legacy Java APIs, such as <code>sun.misc.Unsafe</code>, on top of this API;</p>
+<p>· Provide tooling that mechanically generates Java code from native-code header files; or</p>
+<p>· Change how Java applications that interact with native libraries are packaged and deployed (e.g., via multi-platform JAR files).</p>
+</blockquote>
+<p><em>来源：<a target="_blank" rel="noopener" href="https://openjdk.org/jeps/442">JEP 442: Foreign Function &amp; Memory API (Third Preview)</a></em></p>
+<p>我在阅读该段落时陷入过一个逻辑错误，为避免大家同样陷入该逻辑错误，我在这解释一下。</p>
+<p>该段第二条讲的是：在该API上，重新实现像<code>sun.misc.Unsafe</code>之类的遗留API。而这里是Non-goals，也就是说，该API不会重新实现像<code>sun.misc.Unsafe</code>之类的遗留API，意味着该API会做一些像完善<code>sun.misc.Unsafe</code>之类的工作。</p>
+<p>可以看到，Java FFM API并没有完全脱离JNI。那FFI部分呢？该不会也是封装JNI吧？我们一探究竟。</p>
+<h2 id="foreign-function-interface"><a class="markdownIt-Anchor" href="#foreign-function-interface"></a> Foreign Function Interface</h2>
+<p>我同样写了一个Demo：</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">void</span> <span class="title function_">downCallDemo</span><span class="params">()</span> <span class="keyword">throws</span> Throwable &#123;</span><br><span class="line">    <span class="type">Linker</span> <span class="variable">linker</span> <span class="operator">=</span> Linker.nativeLinker();</span><br><span class="line">    <span class="type">MemorySegment</span> <span class="variable">strlen_address</span> <span class="operator">=</span> linker.defaultLookup().find(<span class="string">&quot;strlen&quot;</span>).get();</span><br><span class="line">    <span class="type">MethodHandle</span> <span class="variable">strlen</span> <span class="operator">=</span> linker.downcallHandle(</span><br><span class="line">            strlen_address,</span><br><span class="line">            FunctionDescriptor.of(JAVA_LONG, ADDRESS)</span><br><span class="line">    );</span><br><span class="line">    <span class="keyword">try</span> (<span class="type">Arena</span> <span class="variable">arena</span> <span class="operator">=</span> Arena.ofConfined()) &#123;</span><br><span class="line">        <span class="type">MemorySegment</span> <span class="variable">cString</span> <span class="operator">=</span> arena.allocateUtf8String(<span class="string">&quot;Hello&quot;</span>);</span><br><span class="line">        <span class="type">long</span> <span class="variable">len</span> <span class="operator">=</span> (<span class="type">long</span>) strlen.invokeExact(cString); <span class="comment">// 5</span></span><br><span class="line">        System.out.println(len);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<ul>
+<li>这里先是整一个Linker，之后获取本地既有函数<code>strlen</code>的地址，接着调用它并传入一个字符串，最后获取它的返回值，输出。</li>
+</ul>
+<p>我比较好奇的是，它是如何直接通过一个字符串查找到一个函数的？</p>
+<h3 id="linker-与-symbollookup"><a class="markdownIt-Anchor" href="#linker-与-symbollookup"></a> Linker 与 SymbolLookup</h3>
+<p>为弄清以上问题，我们先看看<code>linker.defaultLookup()</code>是怎么实现的，因为很明显这里涉及到查找等操作。</p>
+<p><code>Linker.java line:636</code></p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">SymbolLookup <span class="title function_">defaultLookup</span><span class="params">()</span>;</span><br></pre></td></tr></table></figure>
+<ul>
+<li>遗憾的是，<code>Linker</code>是一个接口，里面并没有实现<code>defaultLookup()</code>，因此我们需要找到它的实现类。</li>
+</ul>
+<p>在<code>Linker.java</code>中可以发现，<code>Linker</code>是一个密封接口，仅允许<code>AbstractLinker</code>实现。</p>
+<hr />
+<p><code>AbstractLinker.java line:60</code></p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">public</span> <span class="keyword">abstract</span> <span class="keyword">sealed</span> <span class="keyword">class</span> <span class="title class_">AbstractLinker</span> <span class="keyword">implements</span> <span class="title class_">Linker</span> permits LinuxAArch64Linker, MacOsAArch64Linker,</span><br><span class="line">                                                                      SysVx64Linker, WindowsAArch64Linker,</span><br><span class="line">                                                                      Windowsx64Linker, LinuxPPC64leLinker,</span><br><span class="line">                                                                      LinuxRISCV64Linker, FallbackLinker &#123;</span><br><span class="line"><span class="comment">// ......</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<ul>
+<li>可以看到，<code>AbstractLinker</code>是个密封类，并提供了多个平台的实现。这里便可以推断出，在某个地方存在根据平台返回不同<code>Linker</code>的操作。实际上，这个操作就在<code>Linker.nativeLinker()</code> 😦</li>
+</ul>
+<hr />
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line"></span><br><span class="line">`AbstractLinker.java line:133`</span><br><span class="line"></span><br><span class="line">```java</span><br><span class="line">    @Override</span><br><span class="line">    public SystemLookup defaultLookup() &#123;</span><br><span class="line">        return SystemLookup.getInstance();</span><br><span class="line">    &#125;</span><br></pre></td></tr></table></figure>
+<ul>
+<li>这里是的返回类型是<code>SystemLookup</code>，而在<code>Linker</code>内，<code>defaultLookup</code>的返回类型为<code>SymbolLookup</code>。实际上，<code>SystemLookup</code>是<code>SymbolLookup</code>的实现。</li>
+</ul>
+<p>至此，我们可以判断，在我们的Demo中，<code>linker</code>为对应平台的<code>Linker</code>实现；<code>linker.defaultLookup()</code>实际返回一个SystemLookup对象。</p>
+<p>那么，在<code>linker.defaultLookup().find(&quot;strlen&quot;)</code>中又发生了什么？</p>
+<hr />
+<p><code>SystemLookup.java line:137</code></p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Override</span></span><br><span class="line"><span class="keyword">public</span> Optional&lt;MemorySegment&gt; <span class="title function_">find</span><span class="params">(String name)</span> &#123;</span><br><span class="line">    <span class="keyword">return</span> SYSTEM_LOOKUP.find(name);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<p><code>SystemLookup.java line:57</code></p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> <span class="type">SymbolLookup</span> <span class="variable">SYSTEM_LOOKUP</span> <span class="operator">=</span> makeSystemLookup();</span><br><span class="line"></span><br><span class="line"><span class="keyword">private</span> <span class="keyword">static</span> SymbolLookup <span class="title function_">makeSystemLookup</span><span class="params">()</span> &#123;</span><br><span class="line">    <span class="keyword">try</span> &#123;</span><br><span class="line">        <span class="keyword">if</span> (Utils.IS_WINDOWS) &#123;</span><br><span class="line">            <span class="keyword">return</span> makeWindowsLookup();</span><br><span class="line">        &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">            <span class="keyword">return</span> libLookup(libs -&gt; libs.load(jdkLibraryPath(<span class="string">&quot;syslookup&quot;</span>)));</span><br><span class="line">        &#125;</span><br><span class="line">    &#125; <span class="keyword">catch</span> (Throwable ex) &#123;</span><br><span class="line">        <span class="comment">// This can happen in the event of a library loading failure - e.g. if one of the libraries the</span></span><br><span class="line">        <span class="comment">// system lookup depends on cannot be loaded for some reason. In such extreme cases, rather than</span></span><br><span class="line">        <span class="comment">// fail, return a dummy lookup.</span></span><br><span class="line">        <span class="keyword">return</span> FALLBACK_LOOKUP;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<p><code>SystemLookup.java line:106</code></p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">private</span> <span class="keyword">static</span> SymbolLookup <span class="title function_">libLookup</span><span class="params">(Function&lt;RawNativeLibraries, NativeLibrary&gt; loader)</span> &#123;</span><br><span class="line">    <span class="type">NativeLibrary</span> <span class="variable">lib</span> <span class="operator">=</span> loader.apply(RawNativeLibraries.newInstance(MethodHandles.lookup()));</span><br><span class="line">    <span class="keyword">return</span> name -&gt; &#123;</span><br><span class="line">        Objects.requireNonNull(name);</span><br><span class="line">        <span class="keyword">if</span> (Utils.containsNullChars(name)) <span class="keyword">return</span> Optional.empty();</span><br><span class="line">        <span class="keyword">try</span> &#123;</span><br><span class="line">            <span class="type">long</span> <span class="variable">addr</span> <span class="operator">=</span> lib.lookup(name);</span><br><span class="line">            <span class="keyword">return</span> addr == <span class="number">0</span> ?</span><br><span class="line">                    Optional.empty() :</span><br><span class="line">                    Optional.of(MemorySegment.ofAddress(addr));</span><br><span class="line">        &#125; <span class="keyword">catch</span> (NoSuchMethodException e) &#123;</span><br><span class="line">            <span class="keyword">return</span> Optional.empty();</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<ul>
+<li>不难发现，Demo中调用<code>linker.defaultLookup().find(&quot;strlen&quot;)</code>时，实际返回一个类型为<code>Optional&lt;MemorySegment&gt;</code>的对象。</li>
+<li>在<code>SystemLookup.libLookup()</code>中，进行了加载本地库，获取函数地址等操作。我们需要研究的，就是在这个方法内。</li>
+</ul>
+<h3 id="jdkinternalloader下的本地库相关实例"><a class="markdownIt-Anchor" href="#jdkinternalloader下的本地库相关实例"></a> jdk.internal.loader下的本地库相关实例</h3>
+<p>在以上代码片段中，<code>NativeLibrary</code>用于表示已加载的本地库。官方给的解释如下：</p>
+<blockquote>
+<p>NativeLibrary represents a loaded native library instance.</p>
+</blockquote>
+<p>在以上代码片段中，<code>RawNativeLibraries</code>用于管理已加载的本地库。它有一个<code>libraries</code>哈希表，显然是用于存放已加载的本地库；提供了<code>load</code>，<code>unload</code>等方法的实现。</p>
+<p>注意，使用<code>RawNativeLibraries::load</code>方法加载的本地库，不会被视为JNI本地库，而是被当成一个普通的本地库对待。<code>RawNativeLIbraries</code>可以加载JNI本地库，但是JNI本地库中，包含<code>JNI_OnLoad</code>和<code>JNI_OnUnload </code>函数，这两个函数会被<code>RawNativeLIbraries</code>忽略，可能导致无法维持原JNI库的功能，同时不支持将JNI本地库中的函数和native方法链接。官方解释如下：</p>
+<blockquote>
+<p>RawNativeLibraries has the following properties: 1. Native libraries loaded in this RawNativeLibraries instance are not JNI native libraries. Hence JNI_OnLoad and JNI_OnUnload will be ignored. No support for linking of native method. 2. Native libraries not auto-unloaded. They may be explicitly unloaded via NativeLibraries::unload. 3. No relationship with class loaders</p>
+</blockquote>
+<p>同时，这里存在另外的类用于加载JNI本地库：<code>NativeLibraries</code>。</p>
+<p>从这我们可以看出来，Project Panama将FFI与JNI做了严格的切割。主要原因有这几点：</p>
+<ol>
+<li>FFI默认需要加载的本地库不是专门为JVM设计的。</li>
+<li>FFI要支持本地库可以被不同的Classloader加载。</li>
+<li>FFI要支持本地库可以根据需要被多次加载。</li>
+</ol>
+<blockquote>
+<p>这也是FFI与JNI重要的不同之处，FFI赢太多了。</p>
+</blockquote>
+<p>在以上代码片段中，不难发现，本地函数的地址由<code>NativeLibrary::lookup()</code>得到。</p>
+<p>实际上，在代码片段<code>SystemLookup.java line:106</code>中，<code>lib</code>的类型最终为<code>RawNativeLibraryImpl</code>。该类为<code>RawNativeLibraries</code>的内部类，继承<code>NativeLibrary</code>。而<code>RawNativeLibraries::load</code>的返回值类型就是<code>RawNativeLibraryImpl</code>，因此本地函数的地址由<code>RawNativeLibraryImpl::lookup()</code>得到。</p>
+<p>但它并没有重写<code>lookup()</code>方法，哈哈！而是重写了<code>find()</code>方法：</p>
+<p><code>RawNativeLibraries.java line:168</code></p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Override</span></span><br><span class="line"><span class="keyword">public</span> <span class="type">long</span> <span class="title function_">find</span><span class="params">(String name)</span> &#123;</span><br><span class="line">    <span class="keyword">return</span> findEntry0(handle, name);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<p><code>NativeLibrary.java line:48</code></p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">public</span> <span class="keyword">final</span> <span class="type">long</span> <span class="title function_">lookup</span><span class="params">(String name)</span> <span class="keyword">throws</span> NoSuchMethodException &#123;</span><br><span class="line">    <span class="type">long</span> <span class="variable">addr</span> <span class="operator">=</span> find(name);</span><br><span class="line">    <span class="keyword">if</span> (<span class="number">0</span> == addr) &#123;</span><br><span class="line">        <span class="keyword">throw</span> <span class="keyword">new</span> <span class="title class_">NoSuchMethodException</span>(<span class="string">&quot;Cannot find symbol &quot;</span> + name + <span class="string">&quot; in library &quot;</span> + name());</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="keyword">return</span> addr;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">/*</span></span><br><span class="line"><span class="comment"> * Returns the address of the named symbol defined in the library of</span></span><br><span class="line"><span class="comment"> * the given handle.  Returns 0 if not found.</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="keyword">static</span> <span class="keyword">native</span> <span class="type">long</span> <span class="title function_">findEntry0</span><span class="params">(<span class="type">long</span> handle, String name)</span>;</span><br></pre></td></tr></table></figure>
+<p>至此，我们已经到达了Java宇宙的边界。显然，这里还是用到了JNI，来查找本地函数的地址。</p>
+<h2 id="总结"><a class="markdownIt-Anchor" href="#总结"></a> 总结</h2>
+<p>通过这次分析可以看到，FFM API在架构上做出了很大的优化，这一点或许可以说明FFM API的性能优势。</p>
+<p>FFI在加载机制上做出了很大改变，大大提高了互操作性。</p>
+<p>FFM API并没有独立于jdk.internal.misc.Unsafe和JNI存在，但也不是简单的封装，更不是对JNI的修改，而是一种利用关系。</p>
+<p>遗憾的是，这篇文章并没有涉及到<code>MethodHandle</code>相关的分析，没有讲Java FFI是如何实现<code>downcall</code>和<code>upcall</code>的，其中还有很多有趣的技术和解决方案。</p>
+<blockquote>
+<p>参考：</p>
+<p><a target="_blank" rel="noopener" href="https://openjdk.org/jeps/8310626">JEP draft: Foreign Function &amp; Memory API (openjdk.org)</a></p>
+<p><a target="_blank" rel="noopener" href="https://openjdk.org/projects/jdk/21/">JDK 21 (openjdk.org)</a></p>
+</blockquote>
+
+    </div>
+
+    <div class="about">
+        <h1>About this Post</h1>
+        <div class="details">
+            
+            <p>This post is written by makai410, licensed under <a target="_blank" rel="noopener" href="https://creativecommons.org/licenses/by-nc/4.0">CC BY-NC 4.0</a>.</p>
+        </div>
+    </div>
+
+    
+        
+        
+        <script src="https://giscus.app/client.js" data-repo="makai410/glut410.github.io" data-repo-id="R_kgDOH2uxDA" data-category="Announcements" data-category-id="DIC_kwDOH2uxDM4CQ9qo" data-mapping="title" data-strict="0" data-reactions-enabled="1" data-emit-metadata="0" data-input-position="top" data-theme="dark" data-lang="en" crossorigin="anonymous" async> </script>
+        
+    
+</article>
+
+        <footer>
+    <div class="inner">
+        <div class="links">
+            
+            <div class="group">
+                <h4 class="title">Blog</h4>
+                
+                <a href="/" class="item">Blog</a>
+                
+                <a href="/archives" class="item">Archives</a>
+                
+                <a href="/categories" class="item">Categories</a>
+                
+                <a href="/search" class="item">Search</a>
+                
+                <a href="/friends" class="item">Friends</a>
+                
+                <a href="/projects" class="item">Projects</a>
+                
+                <a href="/about" class="item">About</a>
+                
+            </div>
+            
+            <div class="group">
+                <h4 class="title">Projects</h4>
+                
+                <a target="_blank" rel="noopener" href="https://github.com/makai410/cotack" class="item">cotack</a>
+                
+                <a target="_blank" rel="noopener" href="https://github.com/makai410/vscode-helang" class="item">vscode-helang</a>
+                
+            </div>
+            
+            <div class="group">
+                <h4 class="title">Me</h4>
+                
+                <a target="_blank" rel="noopener" href="https://github.com/makai410" class="item">GitHub</a>
+                
+                <a href="mailto:glut410@outlook.com" class="item">Email</a>
+                
+            </div>
+            
+        </div>
+        <span>&copy; 2024 makai410<br>Powered by <a href="http://hexo.io/" target="_blank">Hexo</a> </span>
+        
+        
+    </div>
+</footer>
+
+
+        
+<script src="/js/main.js"></script>
+
+        
+        
+        
+
+        
+        <script src="https://unpkg.com/scrollreveal"></script>
+        <script>
+            window.addEventListener('load', () => {
+                ScrollReveal({ delay: 250, reset: true, easing: 'cubic-bezier(0, 0, 0, 1)' })
+                ScrollReveal().reveal('.post-list-item .cover-img img')
+                ScrollReveal().reveal('.post-list-item, .card, .content p img, .content .block-large img', { distance: '60px', origin: 'bottom', duration: 800 })
+            })
+        </script>
+        
+    </body>
+</html>
